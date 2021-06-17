@@ -1,46 +1,22 @@
-import os
 import time
 import datetime
 import math
 
-from tqdm import tqdm
 import numpy as np
 import pandas as pd
-from scipy import signal
 from scipy import fftpack
 import matplotlib.pyplot as plt
 import seaborn as sns
 import cv2
 
-GAUSSIAN_FILTER = (9, 9)
-MOTION_THRESH = 150
-MOTION_KERNEL = np.ones((20, 20))
-# length is WINDOW_SIZE/FRAME SPEED seconds
-FRAME_SPEED = 30
-WINDOW_SIZE = 256
-# pad vec to make it INTER_CONST times longer
-# larger values mean more granular interpolation
-INTER_CONST = 8
-# revolutions per minute resolution before interpolation
-RESOLUTION = 60 * FRAME_SPEED / WINDOW_SIZE
-# max cadence in RPMs
-MAX_PEDAL_CADENCE = 150
-WHEEL_RADIUS = 0.22
-# get new S_col every REFRESH_PERIOD frames
-REFRESH_PERIOD = 30
-# memory is approx 1 / (1 - MEMORY_BETA)
-MEMORY_BETA = 0.80
-# wheel has WHEELS_PER_PEDAL revolutions per pedal revolution
-WHEELS_PER_PEDAL = 3.5
-MAX_WHEEL_CADENCE = MAX_PEDAL_CADENCE * WHEELS_PER_PEDAL
-# filter cadences so they can't be increased/decreased by more than this factor
-CADENCE_MULTIPLE_MAX = 2
-
 
 class FreqTracker():
-    def __init__(self):
-        time.sleep(2)
+    def __init__(self, algo_params, thresh_params, user_params):
+        # time.sleep(2)
         print('Warming up...')
+        self.algo_params = algo_params
+        self.thresh_params = thresh_params
+        self.user_params = user_params
         self.frame_mem = []
         # length <= WINDOW_SIZE always
         self.motion_mem = []
@@ -50,7 +26,7 @@ class FreqTracker():
         self.frame_count = -2
         self.data = []
         self.freqs = None
-        self.max_rps = MAX_PEDAL_CADENCE/60
+        self.max_rps = self.thresh_params['MAX_PEDAL_CADENCE'] / 60
         self.mag_history = None
         self.distance = 0
 
@@ -73,7 +49,7 @@ class FreqTracker():
         img = cv2.resize(img, (400, 400))
         frame = self.filter_image(img)
         # if haven't built up a window size
-        if len(self.motion_mem) < WINDOW_SIZE:
+        if len(self.motion_mem) < self.algo_params['WINDOW_SIZE']:
             if len(self.frame_mem) < 3:
                 self.frame_mem += [frame]
             else:
@@ -86,12 +62,12 @@ class FreqTracker():
             self.frame_mem = self.frame_mem[-2:] + [frame]
             # keep last WINDOW_SIZE-1 and add new
             self.motion_mem = (
-                self.motion_mem[-1*(WINDOW_SIZE - 1):] +
+                self.motion_mem[-1 * (self.algo_params['WINDOW_SIZE'] - 1):] +
                 [self.get_motion(self.frame_mem)]
             )
         self.frame_count += 1
-        if (len(self.motion_mem) == WINDOW_SIZE and
-                self.frame_count % REFRESH_PERIOD == 0):
+        if (len(self.motion_mem) == self.algo_params['WINDOW_SIZE'] and
+                self.frame_count % self.algo_params['REFRESH_PERIOD'] == 0):
             self.update_mag_mem()
 
     def update_mag_mem(self):
@@ -99,18 +75,20 @@ class FreqTracker():
         Returns absolute difference between final frame in list
         and all those before it
         '''
-        start_time = time.time()
+        # start_time = time.time()
 
         S_col = np.zeros(len(self.motion_mem))
         for i in range(len(self.motion_mem)):
             S_col[i] = self.get_abs_diff(
                 self.motion_mem[i], self.motion_mem[-1])
 
-        if S_col.shape[0] < WINDOW_SIZE:
+        if S_col.shape[0] < self.algo_params['WINDOW_SIZE']:
             S_col = np.concatenate(
-                (np.zeros(WINDOW_SIZE - S_col.shape[0]), S_col))
+                (np.zeros(self.algo_params['WINDOW_SIZE'] - S_col.shape[0]),
+                    S_col))
 
-        freqs, mags = self.get_freq_spec(S_col, FRAME_SPEED)
+        freqs, mags = self.get_freq_spec(
+            S_col, self.user_params['FRAME_SPEED'])
 
         if self.freqs is None:
             self.freqs = freqs
@@ -122,20 +100,22 @@ class FreqTracker():
 
         if self.mag_mem is None:
             self.mag_mem = np.zeros_like(mags)
-        self.mag_mem = MEMORY_BETA*self.mag_mem + (1 - MEMORY_BETA)*mags
+        self.mag_mem = (self.algo_params['MEMORY_BETA'] * self.mag_mem
+                        + (1 - self.algo_params['MEMORY_BETA']) * mags)
 
         self.update_averages()
 
     def update_averages(self):
-        rpm = 60*self.freqs[np.argmax(self.mag_mem)]
-        kmph = 2*math.pi*WHEEL_RADIUS*WHEELS_PER_PEDAL*rpm*60/1000
+        rpm = 60 * self.freqs[np.argmax(self.mag_mem)]
+        kmph = (2 * math.pi * self.user_params['WHEEL_RADIUS']
+                * self.user_params['WHEELS_PER_PEDAL'] * rpm * 60 / 1000)
         time_delta = time.time() - self.time  # seconds
-        self.distance += kmph*time_delta/(60*60)
+        self.distance += kmph * time_delta / (60 * 60)
         self.time += time_delta
         self.mean_speed = self.distance / (self.time - self.start_time)
         print(
-            'RPM: {}, Frame: {}, Speed (km/h): {},'
-            ' Average Speed (km/h): {}, Distance: {} (km),'
+            'RPM: {}, Frame: {}, Speed (km / h): {},'
+            ' Average Speed (km / h): {}, Distance: {} (km),'
             ' Time: {}'.format(
                 round(rpm, 3),
                 self.frame_count,
@@ -153,7 +133,8 @@ class FreqTracker():
 
     def get_freq_spec(self, vec, f_s, pos_only=True):
         vec = vec - vec.mean()
-        N = INTER_CONST*len(vec)  # how large to make vec after padding
+        # pad to make vector this large
+        N = self.algo_params['INTER_CONST'] * len(vec)
         mags = np.abs(fftpack.fft(vec, n=N))
         freqs = fftpack.fftfreq(N) * f_s
         pos_mask = freqs >= 0
@@ -167,18 +148,20 @@ class FreqTracker():
 
     def filter_image(self, img):
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-        blurred = cv2.GaussianBlur(gray, GAUSSIAN_FILTER, 0)
+        blurred = cv2.GaussianBlur(
+            gray, self.algo_params['GAUSSIAN_FILTER'], 0)
         return blurred
 
     def get_motion(self, frame_list):
         assert len(frame_list) == 3
         motion_1, motion_2 = [
-            np.absolute(frame_list[i] - frame_list[i+1]) > MOTION_THRESH
+            (np.absolute(frame_list[i] - frame_list[i+1])
+                > self.thresh_params['MOTION_THRESH'])
             for i in range(len(frame_list) - 1)
         ]
         anded_motion = np.float32(np.logical_and(motion_1, motion_2))
         opened_motion = cv2.morphologyEx(
-            anded_motion, cv2.MORPH_OPEN, MOTION_KERNEL)
+            anded_motion, cv2.MORPH_OPEN, self.algo_params['MOTION_KERNEL'])
         opened_motion = np.float32(
             cv2.resize(opened_motion, (200, 200)) >= 0.5
         )
@@ -189,7 +172,7 @@ class FreqTracker():
 
     def get_data(self):
         df = pd.DataFrame(self.data, columns=['frame_num', 'rpm'])
-        df['second'] = df['frame_num'] / FRAME_SPEED
+        df['second'] = df['frame_num'] / self.user_params['FRAME_SPEED']
         return df
 
     def plot_data(self):
@@ -200,6 +183,42 @@ class FreqTracker():
         plt.show()
 
 
-pedal_tracker = FreqTracker()
+# Constants that can, but do not have to be, changed by users
+algo_params = dict(
+    # Number of frames to keep in memory
+    WINDOW_SIZE=256,
+    # Vector padding multiple (larger=more granular interpolation)
+    INTER_CONST=8,
+    # Update RPM reading after this many video frames
+    REFRESH_PERIOD=30,
+    # Exponentially weighted average smoothing parameter
+    MEMORY_BETA=0.80,
+    # Image-smoothing filter
+    GAUSSIAN_FILTER=(9, 9),
+    # Filter for morphological open
+    MOTION_KERNEL=np.ones((20, 20))
+)
+
+# Thresholds that may be specific to the person, bike, and / or setting
+thresh_params = dict(
+    # Minimum grayscale change required to be considered motion
+    MOTION_THRESH=150,
+    # Cadences can't be increased / decreased by more than this factor
+    CADENCE_MULTIPLE_MAX=2,
+    # Max cadence in RPMs
+    MAX_PEDAL_CADENCE=150
+)
+
+# Constants that must match the camera and bike being used
+user_params = dict(
+    # Camera frame speed
+    FRAME_SPEED=30,
+    # Wheel radius in meters
+    WHEEL_RADIUS=0.22,
+    # Number of wheel revolutions per pedal revolution
+    WHEELS_PER_PEDAL=3.5
+)
+
+pedal_tracker = FreqTracker(algo_params, thresh_params, user_params)
 pedal_tracker.run_feed()
 pedal_tracker.plot_data()
