@@ -1,19 +1,22 @@
 import time
 import datetime
 import math
+from multiprocessing import Process, Queue
 
 import numpy as np
 import pandas as pd
 from scipy import fftpack
 import matplotlib.pyplot as plt
+from matplotlib.animation import FuncAnimation
 import seaborn as sns
 import cv2
 
 
 class FreqTracker():
-    def __init__(self, algo_params, thresh_params, user_params):
-        # time.sleep(2)
+    def __init__(self, plot_q, algo_params, thresh_params, user_params):
+        # time.sleep(5)
         print('Warming up...')
+        self.plot_q = plot_q
         self.algo_params = algo_params
         self.thresh_params = thresh_params
         self.user_params = user_params
@@ -31,12 +34,15 @@ class FreqTracker():
         self.distance = 0
 
     def run_feed(self):
-        cap = cv2.VideoCapture(0)
+        # cap = cv2.VideoCapture(0)
+        cap = cv2.VideoCapture('../cycling-tracker-private/videos/short_vid3.MOV')
         self.start_time = time.time()
         self.time = self.start_time
         try:
             while(cap.isOpened()):
                 ret, frame = cap.read()
+                ######################## COMMENT OUT BELOW IF USING VIDEO
+                time.sleep(1 / 30)
                 if ret:
                     self.process_image(frame)
                 else:
@@ -129,7 +135,19 @@ class FreqTracker():
                 ).split('.')[0]
             )
         )
-        self.data.append((self.frame_count, rpm))
+        data_dict = {
+            'frame_count': self.frame_count,
+            'second': self.time - self.start_time,
+            'rpm': rpm,
+            'speed': kmph,
+            'distance': self.distance
+        }
+
+        # self.plot_q.put((self.time - self.start_time, rpm))
+        self.plot_q.put(data_dict)
+
+        # self.data.append((self.frame_count, rpm))
+        self.data.append(data_dict)
 
     def get_freq_spec(self, vec, f_s, pos_only=True):
         vec = vec - vec.mean()
@@ -170,55 +188,95 @@ class FreqTracker():
     def get_abs_diff(self, mot1, mot2):
         return np.absolute(mot2 - mot1).sum()
 
-    def get_data(self):
-        df = pd.DataFrame(self.data, columns=['frame_num', 'rpm'])
-        df['second'] = df['frame_num'] / self.user_params['FRAME_SPEED']
-        return df
-
-    def plot_data(self):
-        pedal_data = self.get_data()
-        sns.lineplot(data=pedal_data, x='second', y='rpm')
-        plt.xlabel('Second')
-        plt.ylabel('RPM')
-        plt.show()
+    # def plot_data(self):
+    #     df = pd.DataFrame.from_dict(self.data)
+    #     sns.lineplot(data=df x='second', y='rpm')
+    #     plt.xlabel('Second')
+    #     plt.ylabel('RPM')
+    #     plt.show()
 
 
-# Constants that can, but do not have to be, changed by users
-algo_params = dict(
-    # Number of frames to keep in memory
-    WINDOW_SIZE=256,
-    # Vector padding multiple (larger=more granular interpolation)
-    INTER_CONST=8,
-    # Update RPM reading after this many video frames
-    REFRESH_PERIOD=30,
-    # Exponentially weighted average smoothing parameter
-    MEMORY_BETA=0.80,
-    # Image-smoothing filter
-    GAUSSIAN_FILTER=(9, 9),
-    # Filter for morphological open
-    MOTION_KERNEL=np.ones((20, 20))
-)
+def plot_realtime(q):
+    second_list = []
+    rpm_list = []
+    speed_list = []
+    distance_list = []
+    fig, ax = plt.subplots(2, 2)
+    rpm_max = 160
+    speed_max = 60
+    distance_max = 10
+    ax[0, 0].set_ylim([0, rpm_max])
+    ax[0, 1].set_ylim([0, speed_max])
+    ax[1, 0].set_ylim([0, distance_max])
+    def _update_plot(i):
+        while not q.empty():
+            data_dict = q.get()
+            second_list.append(data_dict['second'])
+            rpm_list.append(data_dict['rpm'])
+            speed_list.append(data_dict['speed'])
+            distance_list.append(data_dict['distance'])
+        # plt.cla()
+        # ax[0, 0].clear()
+        ax[0, 0].plot(second_list, rpm_list)
+        # ax[0, 1].clear()
+        ax[0, 1].plot(second_list, speed_list)
+        # ax[1, 0].clear()
+        ax[1, 0].plot(second_list, distance_list)
+        # plt.plot(x_vals, y_vals, label='<placeholder>')
+        # plt.tight_layout()
 
-# Thresholds that may be specific to the person, bike, and / or setting
-thresh_params = dict(
-    # Minimum grayscale change required to be considered motion
-    MOTION_THRESH=150,
-    # Cadences can't be increased / decreased by more than this factor
-    CADENCE_MULTIPLE_MAX=2,
-    # Max cadence in RPMs
-    MAX_PEDAL_CADENCE=150
-)
+    # plt.legend(loc='upper left')
+    ani = FuncAnimation(fig, _update_plot, interval=250)
+    # ani = FuncAnimation(plt.gcf(), _update_plot, interval=250)
+    
+    # plt.tight_layout()
+    plt.show()
 
-# Constants that must match the camera and bike being used
-user_params = dict(
-    # Camera frame speed
-    FRAME_SPEED=30,
-    # Wheel radius in meters
-    WHEEL_RADIUS=0.22,
-    # Number of wheel revolutions per pedal revolution
-    WHEELS_PER_PEDAL=3.5
-)
+def main():
+    # Constants that can, but do not have to be, changed by users
+    algo_params = dict(
+        # Number of frames to keep in memory
+        WINDOW_SIZE=256,
+        # Vector padding multiple (larger=more granular interpolation)
+        INTER_CONST=8,
+        # Update RPM reading after this many video frames
+        REFRESH_PERIOD=30,
+        # Exponentially weighted average smoothing parameter
+        MEMORY_BETA=0.80,
+        # Image-smoothing filter
+        GAUSSIAN_FILTER=(9, 9),
+        # Filter for morphological open
+        MOTION_KERNEL=np.ones((20, 20))
+    )
+    # Thresholds that may be specific to the person, bike, and / or setting
+    thresh_params = dict(
+        # Minimum grayscale change required to be considered motion
+        MOTION_THRESH=150,
+        # Cadences can't be increased / decreased by more than this factor
+        CADENCE_MULTIPLE_MAX=2,
+        # Max cadence in RPMs
+        MAX_PEDAL_CADENCE=150
+    )
+    # Constants that must match the camera and bike being used
+    user_params = dict(
+        # Camera frame speed
+        FRAME_SPEED=30,
+        # Wheel radius in meters
+        WHEEL_RADIUS=0.22,
+        # Number of wheel revolutions per pedal revolution
+        WHEELS_PER_PEDAL=3.5
+    )
 
-pedal_tracker = FreqTracker(algo_params, thresh_params, user_params)
-pedal_tracker.run_feed()
-pedal_tracker.plot_data()
+    plot_q = Queue()
+    plot_proc = Process(target=plot_realtime, args=(plot_q, ), daemon=True)
+    pedal_tracker = FreqTracker(
+        plot_q, algo_params, thresh_params, user_params)
+    plot_proc.start()
+    pedal_tracker.run_feed()
+    plot_proc.join()
+
+
+    # pedal_tracker.plot_data()
+
+if __name__ == "__main__":
+    main()
