@@ -2,6 +2,8 @@ import time
 import datetime
 import math
 from multiprocessing import Process, Queue
+import pickle
+from collections import deque
 
 import numpy as np
 import pandas as pd
@@ -41,6 +43,8 @@ class FreqTracker():
         try:
             while(cap.isOpened()):
                 ret, frame = cap.read()
+                # self.plot_q.put({'image': frame})
+                self.plot_q.appendleft({'image': frame})
                 ######################## COMMENT OUT BELOW IF USING VIDEO
                 time.sleep(1 / 30)
                 if ret:
@@ -143,8 +147,8 @@ class FreqTracker():
             'distance': self.distance
         }
 
-        # self.plot_q.put((self.time - self.start_time, rpm))
-        self.plot_q.put(data_dict)
+        # self.plot_q.put(data_dict)
+        self.plot_q.appendleft(data_dict)
 
         # self.data.append((self.frame_count, rpm))
         self.data.append(data_dict)
@@ -267,13 +271,17 @@ def main():
         WHEELS_PER_PEDAL=3.5
     )
 
-    plot_q = Queue()
-    plot_proc = Process(target=plot_realtime, args=(plot_q, ), daemon=True)
+    # plot_q = Queue()
+    plot_q = deque()
+    # plot_proc = Process(target=plot_realtime, args=(plot_q, ), daemon=True)
     pedal_tracker = FreqTracker(
         plot_q, algo_params, thresh_params, user_params)
-    plot_proc.start()
+    # plot_proc.start()
     pedal_tracker.run_feed()
-    plot_proc.join()
+    # plot_proc.join()
+
+    with open('data.pickle', 'wb') as f:
+	    pickle.dump(pedal_tracker.plot_q, f)
 
 
     # pedal_tracker.plot_data()
