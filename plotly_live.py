@@ -19,17 +19,17 @@ import cv2
 # from pyorbital.orbital import Orbital
 # satellite = Orbital('TERRA')
 
-# df = pd.read_csv('data.csv')
-# cap = cv2.VideoCapture('../cycling-tracker-private/videos/short_vid3.MOV')
-with open('data.pickle', 'rb') as f:
-    q = pickle.load(f)
+df = pd.read_csv('data.csv')
+cap = cv2.VideoCapture('../cycling-tracker-private/videos/short_vid3.MOV')
+# with open('data.pickle', 'rb') as f:
+#     q = pickle.load(f)
 
-# frame_list = []
-# for _ in range(10*30):
-#     ret, frame = cap.read()
-#     if not ret:
-#         break
-#     frame_list.append(frame)
+frame_list = []
+for _ in range(10*30):
+    ret, frame = cap.read()
+    if not ret:
+        break
+    frame_list.append(frame)
 
 external_stylesheets = ['https://codepen.io/chriddyp/pen/bWLwgP.css']
 
@@ -39,37 +39,32 @@ app.layout = html.Div(
         html.H4('Cycling Tracker'),
         html.Div(id='live-update-text'),
         html.Div(id='image'),
-        # dcc.Graph(
-        #     id='speed-graph',
-        #     # figure=dict(layout=dict(height=700))
-        # ),
+        dcc.Graph(
+            id='speed-graph',
+            # figure=dict(layout=dict(height=700))
+        ),
         dcc.Interval(
             id='interval-component',
-            interval=1*1000, # in milliseconds
+            interval=1/10*1000, # in milliseconds
             n_intervals=0
-        )
+        ),
+        dcc.Store(id='intermediate-value')
     ])
 )
 
 @app.callback(
     Output('intermediate-value', 'data'),
     Input('interval-component', 'n_intervals'))
-def clean_data(value):
-    data_dict = q.pop()
+def clean_data(n):
+    return n
 
 
 @app.callback(Output('live-update-text', 'children'),
               Input('intermediate-value', 'data'))
-def update_metrics(data_dict):
+def update_metrics(n):
+    print(n)
     # lon, lat, alt = satellite.get_lonlatalt(datetime.datetime.now())
-    # frame_count, second, rpm, speed, distance = df.iloc[n]
-    if 'frame_count' not in data_dict:
-        return dash.no_update
-    frame_count = data_dict['frame_count']
-    second = data_dict['second']
-    rpm = data_dict['rpm']
-    speed = data_dict['speed']
-    distance = data_dict['distance']
+    frame_count, second, rpm, speed, distance = df.iloc[n]
     style = {'padding': '5px', 'fontSize': '16px'}
     return [
         html.Span('Frame: {0:.2f}'.format(frame_count), style=style),
@@ -77,39 +72,35 @@ def update_metrics(data_dict):
         html.Span('RPM: {0:0.2f}'.format(rpm), style=style)
     ]
 
-# # Multiple components can update everytime interval gets fired.
-# @app.callback(Output('speed-graph', 'figure'),
-#               Input('intermediate-value', 'data'))
-# def update_graph_live(data_dict):
-#     if 'frame_count' not in data_dict:
-#         return dash.no_update
-#     fig = plotly.tools.make_subplots(rows=1, cols=1, vertical_spacing=0.2)
-#     # y_min = min(20, df['speed'].iloc[:n+1].min())
-#     # y_max = max(30, df['speed'].iloc[:n+1].max())
-#     # fig.update_layout(yaxis_range=[y_min, y_max])
-#     fig.update_layout(yaxis_range=[20, 35])
-#     fig.append_trace({
-#         'x': df['second'].iloc[:n+1],
-#         'y': df['speed'].iloc[:n+1],
-#         'name': 'Altitude',
-#         'mode': 'lines+markers',
-#         'type': 'scatter'
-#     }, row=1, col=1)
-#     return fig
+
+# Multiple components can update everytime interval gets fired.
+@app.callback(Output('speed-graph', 'figure'),
+              Input('intermediate-value', 'data'))
+def update_graph_live(n):
+    n = int(n / 10)
+    fig = plotly.tools.make_subplots(rows=1, cols=1, vertical_spacing=0.2)
+    y_min = min(20, df['speed'].iloc[:n+1].min())
+    y_max = max(30, df['speed'].iloc[:n+1].max())
+    fig.update_layout(yaxis_range=[y_min, y_max])
+    fig.append_trace({
+        'x': df['second'].iloc[:n+1],
+        'y': df['speed'].iloc[:n+1],
+        'name': 'Altitude',
+        'mode': 'lines+markers',
+        'type': 'scatter'
+    }, row=1, col=1)
+    return fig
 
 # Multiple components can update everytime interval gets fired.
 @app.callback(Output('image', 'children'),
               Input('intermediate-value', 'data'))
-def update_graph_live(data_dict):
+def update_graph_live(n):
     # for _ in range(1):
     #     ret, frame = cap.read()
     # ret, frame = cap.read()
     # if not ret:
     #     return dash.no_update
-    # frame = frame_list[3*n]
-    if 'image' not in data_dict:
-        return dash.no_update
-    frame = data_dict['image']
+    frame = frame_list[3*n]
     k = 0.4
     new_width = int(k * frame.shape[1])
     new_height = int(k * frame.shape[0])
@@ -124,4 +115,4 @@ def open_webpage():
 if __name__ == '__main__':
     Timer(3, open_webpage).start()
     # open_webpage()
-    app.run_server(debug=True, use_reloader=False)
+    app.run_server(debug=False, use_reloader=False)
