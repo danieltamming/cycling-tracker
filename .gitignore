@@ -1,5 +1,5 @@
 videos/
 .DS_Store
 .ipynb_checkpoints/
-*.csv
 *.pickle
+*.csv

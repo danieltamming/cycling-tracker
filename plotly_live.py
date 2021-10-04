@@ -73,7 +73,11 @@ def update_figures(n):
     fig = plotly.tools.make_subplots(rows=1, cols=1, vertical_spacing=0.2)
     y_min = min(20, df['speed'].iloc[:n+1].min())
     y_max = max(30, df['speed'].iloc[:n+1].max())
-    fig.update_layout(yaxis_range=[y_min, y_max])
+    fig.update_layout(
+    	yaxis_range=[y_min, y_max], 
+    	xaxis=dict(title='Time Elapsed (s)'), 
+    	yaxis=dict(title='Speed (km/h)')
+    )
     fig.append_trace({
         'x': df['second'].iloc[:n+1],
         'y': df['speed'].iloc[:n+1],
